@@ -18,12 +18,9 @@ part 'src/helpers.dart';
 /// The mirror based version of dartson.
 class Dartson<T> {
   final Codec _codec;
-  final Logger _log;
   final Map<String, TypeTransformer> _transformers = {};
 
-  Dartson(this._codec, [String identifier = 'dartson'])
-      : _log = new Logger(identifier) {
-    _log.fine('Initiate mirror based Dartson class.');
+  Dartson(this._codec, [String identifier = 'dartson']) {
     _transformers.addAll(_simpleTransformers);
   }
 
@@ -122,7 +119,6 @@ class Dartson<T> {
         }
       });
 
-      _log.finer("Serialization completed.");
       return result;
     }
   }
@@ -135,19 +131,15 @@ class Dartson<T> {
     InstanceMirror field = instMirror.getField(symbol);
     Object value = field.reflectee;
     String fieldName = MirrorSystem.getName(symbol);
-    _log.finer(() => "Start serializing field: ${fieldName}");
 
     // check if there is a DartsonProperty annotation
     Property prop = _getProperty(variable);
-    _log.finer(() => "Property: ${prop}");
 
     if (prop != null && prop.name != null) {
-      _log.finer("Field renamed to: ${prop.name}");
       fieldName = prop.name;
     }
 
     if (value != null && (prop != null ? !prop.ignore : true)) {
-      _log.finer(() => "Serializing field: ${fieldName}");
       result[fieldName] = serialize(value);
     }
   }
@@ -173,7 +165,6 @@ class Dartson<T> {
           // if it's a setter function we need to change the name
           if (decl is MethodMirror && decl.isSetter) {
             fieldName = varName = varName.substring(0, varName.length - 1);
-            _log.finer(() => 'Found setter function varName: ${varName}');
             valueType = decl.parameters[0].type;
           } else if (decl is VariableMirror) {
             valueType = decl.type;
@@ -187,8 +178,6 @@ class Dartson<T> {
             fieldName = prop.name;
           }
 
-          // _log.finer(() =>
-          //    'Try to fill object with: ${fieldName}: ${filler[fieldName]}');
           actions.add(fieldName);
           actions.add(sym);
           actions.add(_valueConverter(valueType));
@@ -209,21 +198,17 @@ class Dartson<T> {
       }
     }
 
-    _log.fine(() => "Filled object completly: ${filler}");
   }
 
   Object _valueConverter(TypeMirror valueType) {
     var symbolName = _getName(valueType.qualifiedName),
         transformer;
 
-    _log.finer(() => 'Convert "${key}": $value to ${symbolName}');
-
     if (valueType is ClassMirror &&
         !valueType.isOriginalDeclaration &&
         valueType.hasReflectedType &&
         !_hasOnlySimpleTypeArguments(valueType)) {
       ClassMirror varMirror = valueType;
-      _log.finer('Handle generic type.');
       // handle generic lists
       if (varMirror.originalDeclaration.qualifiedName == _QN_LIST) {
         return (key, value) => _convertGenericList(varMirror, value);
@@ -238,8 +223,9 @@ class Dartson<T> {
     } else if ((transformer = _transformers[symbolName]) != null) {
       return (key, value) => transformer.decode(value);
     } else {
+      final create = _classInstantiator(valueType);
       return (key, value) {
-        var obj = _initiateClass(valueType);
+        var obj = create();
 
         if (!(value is String) && !(value is num) && !(value is bool)) {
           _fillObject(obj, value);
@@ -263,14 +249,11 @@ class Dartson<T> {
     var symbolName = _getName(valueType.qualifiedName),
         transformer;
 
-    _log.finer(() => 'Convert "${key}": $value to ${symbolName}');
-
     if (valueType is ClassMirror &&
         !valueType.isOriginalDeclaration &&
         valueType.hasReflectedType &&
         !_hasOnlySimpleTypeArguments(valueType)) {
       ClassMirror varMirror = valueType;
-      _log.finer('Handle generic type.');
       // handle generic lists
       if (varMirror.originalDeclaration.qualifiedName == _QN_LIST) {
         return _convertGenericList(varMirror, value);
@@ -301,7 +284,6 @@ class Dartson<T> {
 
   /// Converts a list of objects to a list with a Class.
   List _convertGenericList(ClassMirror listMirror, List fillerList) {
-    _log.finer('Converting generic list');
     ClassMirror itemMirror = listMirror.typeArguments[0];
     InstanceMirror resultList = _initiateClass(listMirror);
 
@@ -312,13 +294,11 @@ class Dartson<T> {
           .add(convert("@LIST_ITEM", item));
     });
 
-    _log.finer(() => "Created generic list: ${resultList.reflectee}");
     return resultList.reflectee;
   }
 
   /// Converts a generic map.
   Map _convertGenericMap(ClassMirror mapMirror, Map fillerMap) {
-    _log.finer(() => 'Converting generic map');
 
     ClassMirror itemMirror = mapMirror.typeArguments[1];
     ClassMirror keyMirror = mapMirror.typeArguments[0];
@@ -329,11 +309,8 @@ class Dartson<T> {
       var keyItem = _convertValue(keyMirror, key, "@MAP_KEY");
       var valueItem = _convertValue(itemMirror, value, "@MAP_VALUE");
       reflectee[keyItem] = valueItem;
-
-      _log.finer(() => "Added item ${valueItem} to map key: ${keyItem}");
     });
 
-    _log.finer("Map converted completly");
     return reflectee;
   }
 
@@ -349,14 +326,10 @@ class Dartson<T> {
   ///  Throws [NoConstructorError] if the class doesn't have a constructor without or
   ///    only with optional arguments.
   InstanceMirror _initiateClass(ClassMirror classMirror) {
-    _log.finer(() => "Parsing to class: ${_getName(classMirror.qualifiedName)}");
     Symbol constrMethod = null;
 
     classMirror.declarations.forEach((sym, decl) {
       if (decl is MethodMirror && decl.isConstructor) {
-        _log.finer(() =>
-            'Found constructor function: ${_getName(decl.qualifiedName)}');
-
         if (decl.parameters.length == 0) {
           constrMethod = decl.constructorName;
         } else {
@@ -373,22 +346,46 @@ class Dartson<T> {
 
     InstanceMirror obj;
     if (classMirror.qualifiedName == _QN_LIST) {
-      _log.finer('No constructor for list found, try to run empty one');
       obj = reflect([]);
     } else if (classMirror.qualifiedName == _QN_MAP) {
-      _log.finer('No constructor for map found');
       obj = reflect({});
     } else if (constrMethod != null) {
-      _log.finer(() => "Found constructor: \"${_getName(constrMethod)}\"");
       obj = classMirror.newInstance(constrMethod, []);
-
-      _log.finer(() =>
-          "Created instance of type: ${_getName(obj.type.qualifiedName)}");
     } else {
-      _log.finer("No constructor found.");
       throw new NoConstructorError(classMirror);
     }
 
     return obj;
+  }
+
+  _classInstantiator(ClassMirror classMirror) {
+    Symbol constrMethod = null;
+
+    classMirror.declarations.forEach((sym, decl) {
+      if (decl is MethodMirror && decl.isConstructor) {
+        if (decl.parameters.length == 0) {
+          constrMethod = decl.constructorName;
+        } else {
+          bool onlyOptional = true;
+          decl.parameters
+              .forEach((p) => !p.isOptional && (onlyOptional = false));
+
+          if (onlyOptional) {
+            constrMethod = decl.constructorName;
+          }
+        }
+      }
+    });
+
+    InstanceMirror obj;
+    if (classMirror.qualifiedName == _QN_LIST) {
+      return () => reflect([]);
+    } else if (classMirror.qualifiedName == _QN_MAP) {
+      return () => reflect({});
+    } else if (constrMethod != null) {
+      return () => classMirror.newInstance(constrMethod, []);
+    } else {
+      throw new NoConstructorError(classMirror);
+    }
   }
 }
